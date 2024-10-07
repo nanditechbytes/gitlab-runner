@@ -1,0 +1,77 @@
+stages:
+  - static-code-analysis
+  - build
+  - scan
+
+variables:
+    DOCKERFILE_PATH: example/Dockerfile
+    DOCKER_HUB_USERNAME: "devops091"
+    DOCKER_HUB_REPO: "nanditechbytes"
+    IMAGE_NAME: docker.io/$DOCKER_HUB_USERNAME/$DOCKER_HUB_REPO:$CI_COMMIT_SHA
+
+mega-linter:
+  stage: static-code-analysis
+  tags:
+    - k8s-runner
+  # You can override Mega-Linter flavor used to have faster performances
+  # More info at https://nvuillam.github.io/mega-linter/flavors/
+  image: nvuillam/mega-linter-all:v4
+  script: [ "true" ]
+  variables:
+    # All available variables are described in documentation
+    # https://nvuillam.github.io/mega-linter/configuration/
+    DEFAULT_WORKSPACE: $CI_PROJECT_DIR/example
+    DEFAULT_BRANCH: main
+    # ADD YOUR CUSTOM ENV VARIABLES HERE TO OVERRIDE VALUES OF .mega-linter.yml AT THE ROOT OF YOUR REPOSITORY
+  artifacts:
+    when: always
+    paths:
+      - report
+    expire_in: 1 week
+
+
+build-image:
+  stage: build
+  tags:
+    - k8s-runner
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+  script:
+    - echo "{\"auths\":{\"https://index.docker.io/v1/\":{\"username\":\"$DOCKER_HUB_USERNAME\",\"password\":\"$DOCKER_HUB_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --dockerfile "${CI_PROJECT_DIR}/"${DOCKERFILE_PATH}""
+      --destination "${IMAGE_NAME}"
+
+container_scanning:
+  stage: scan
+  tags:
+    - k8s-runner
+  image:
+    name: docker.io/aquasec/trivy:latest
+    entrypoint: [""]
+  variables:
+    # GIT_STRATEGY: none
+    TRIVY_USERNAME: "$DOCKER_HUB_USERNAME"
+    TRIVY_PASSWORD: "$DOCKER_HUB_PASSWORD"
+    TRIVY_AUTH_URL: "docker.io"
+    FULL_IMAGE_NAME: "$DOCKER_HUB_REPO:$CI_COMMIT_SHA"
+  script:
+    - trivy --version
+    - time trivy image --clear-cache
+    - time trivy --download-db-only --no-progress --cache-dir .trivycache/
+    # Builds report and puts it in the default workdir $CI_PROJECT_DIR, so `artifacts:` can take it from there
+    - time trivy --exit-code 0 --cache-dir .trivycache/ --no-progress --format template --template "@/contrib/gitlab.tpl"
+        --output "$CI_PROJECT_DIR/gl-container-scanning-report.json" "$FULL_IMAGE_NAME"
+    # Prints full report
+    - time trivy --exit-code 0 --cache-dir .trivycache/ --no-progress "$FULL_IMAGE_NAME"
+    # Fail on critical vulnerabilities
+    - time trivy --exit-code 1 --cache-dir .trivycache/ --severity CRITICAL --no-progress "$FULL_IMAGE_NAME"
+  cache:
+    paths:
+      - .trivycache/
+  # # Enables https://docs.gitlab.com/ee/user/application_security/container_scanning/ (Container Scanning report is available on GitLab EE Ultimate or GitLab.com Gold)
+  # artifacts:
+  #   when:                          always
+  #   reports:
+  #     container_scanning:          gl-container-scanning-report.json
