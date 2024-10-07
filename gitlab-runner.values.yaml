@@ -3,7 +3,7 @@ rbac:
   clusterWideAccess: false
   create: true
   serviceAccountName: gitlab-runner
-runnerToken: glrt-t3_XjhicMyXxbJnx68hbf3S
+runnerToken: <your-runner-token>
 runners:
   privileged: false
   serviceAccountName: gitlab-runner
